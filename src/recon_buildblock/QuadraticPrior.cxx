@@ -293,6 +293,162 @@ compute_value(const DiscretisedDensity<3,elemT> &current_image_estimate)
 template <typename elemT>
 void 
 QuadraticPrior<elemT>::
+compute_proximal(DiscretisedDensity<3,elemT>& prior_proximal, 
+                 const DiscretisedDensity<3,elemT> &current_image_estimate,
+                 int tau)
+{
+  assert(  prior_proximal.has_same_characteristics(current_image_estimate));  
+  if (this->penalisation_factor==0)
+  {
+    prior_proximal.fill(0);
+    return;
+  }
+
+  this->check(current_image_estimate);
+  
+  
+  const DiscretisedDensityOnCartesianGrid<3,elemT>& current_image_cast =
+    dynamic_cast< const DiscretisedDensityOnCartesianGrid<3,elemT> &>(current_image_estimate);
+  
+  if (this->weights.get_length() ==0)
+  {
+    compute_weights(this->weights, current_image_cast.get_grid_spacing(), this->only_2D);
+  }
+ 
+ 
+  
+  const bool do_kappa = !is_null_ptr(kappa_ptr);
+  if (do_kappa && !kappa_ptr->has_same_characteristics(current_image_estimate))
+    error("QuadraticPrior: kappa image has not the same index range as the reconstructed image\n");
+
+  const int min_z = current_image_estimate.get_min_index();  
+  const int max_z = current_image_estimate.get_max_index();  
+  for (int z=min_z; z<=max_z; z++) 
+    { 
+      const int min_dz = max(weights.get_min_index(), min_z-z); 
+      const int max_dz = min(weights.get_max_index(), max_z-z); 
+      
+      const int min_y = current_image_estimate[z].get_min_index(); 
+      const int max_y = current_image_estimate[z].get_max_index(); 
+      
+      for (int y=min_y;y<= max_y;y++) 
+        { 
+          const int min_dy = max(weights[0].get_min_index(), min_y-y); 
+          const int max_dy = min(weights[0].get_max_index(), max_y-y);             
+          
+          const int min_x = current_image_estimate[z][y].get_min_index();
+          const int max_x = current_image_estimate[z][y].get_max_index();  
+          
+          for (int x=min_x;x<= max_x;x++)
+            {
+              const int min_dx = max(weights[0][0].get_min_index(), min_x-x);
+              const int max_dx = min(weights[0][0].get_max_index(), max_x-x);
+                
+                // This is similar to Green's OSL in that it uses the current image for the neighbourhood pixel values
+
+                /* formula:
+                  (sum_dx,dy,dz
+                   weights[dz][dy][dx] *
+                   (current_image_estimate[z+dz][y+dy][x+dx]) *
+                   (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z+dz][y+dy][x+dx] - 1/(2 tau)*current_image_estimate[z][y][x])
+                  /(sum_dx,dy,dz
+                    weights[dz][dy][dx]*
+                   (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z+dz][y+dy][x+dx] - 1/(2 tau))
+                   ;
+                */
+#if 1
+                elemT proximal = 0;
+                int N  = max_dz*max_dy*max_dx
+                for (int dz=min_dz;dz<=max_dz;++dz)
+                  for (int dy=min_dy;dy<=max_dy;++dy)
+                    for (int dx=min_dx;dx<=max_dx;++dx)
+                      {
+                        elemT numerator =
+                          weights[dz][dy][dx] *
+                          /// OSL step
+                          current_image_estimate[z+dz][y+dy][x+dx];
+
+                        if (do_kappa)
+                          numerator *= 
+                            (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z+dz][y+dy][x+dx];
+
+                        numerator -= 1/tau * current_image_estimate[z][y][x]
+
+                        elemT denomenator = 
+                          N * weights[dz][dy][dx] - 1/tau
+                        
+                        proximal += current;
+                      }
+#else
+                // TODO:
+                // This has not been changed from the gradient. Needs revising
+
+                // attempt to speed up by precomputing the sum of weights.
+                // The current code gives identical results but is actually slower
+                // than the above, at least when kappas are present.
+
+
+                // precompute sum of weights
+                // TODO without kappas, this is just weights.sum() most of the time, 
+                // but not near edges
+                float sum_of_weights = 0;
+                {
+                  if (do_kappa)
+                    {                
+                      for (int dz=min_dz;dz<=max_dz;++dz)
+                        for (int dy=min_dy;dy<=max_dy;++dy)
+                          for (int dx=min_dx;dx<=max_dx;++dx)
+                            sum_of_weights +=  weights[dz][dy][dx]*(*kappa_ptr)[z+dz][y+dy][x+dx];
+                    }
+                  else
+                    {
+                      for (int dz=min_dz;dz<=max_dz;++dz)
+                        for (int dy=min_dy;dy<=max_dy;++dy)
+                          for (int dx=min_dx;dx<=max_dx;++dx)
+                            sum_of_weights +=  weights[dz][dy][dx];
+                    }
+                }
+                // now compute contribution of central term
+                elemT proximal = sum_of_weights * current_image_estimate[z][y][x] ;
+
+                // subtract the rest
+                for (int dz=min_dz;dz<=max_dz;++dz)
+                  for (int dy=min_dy;dy<=max_dy;++dy)
+                    for (int dx=min_dx;dx<=max_dx;++dx)
+                      {
+                        elemT current =
+                          weights[dz][dy][dx] * current_image_estimate[z+dz][y+dy][x+dx];
+
+                        if (do_kappa)
+                          current *= (*kappa_ptr)[z+dz][y+dy][x+dx];
+
+                        proximal -= current;
+                      }
+                // multiply with central kappa
+                if (do_kappa)
+                  proximal *= (*kappa_ptr)[z][y][x];
+#endif
+                prior_proximal[z][y][x]= proximal * this->penalisation_factor;
+              }              
+          }
+    }
+
+  info(boost::format("Prior proximalt max %1%, min %2%\n") % prior_proximal.find_max() % prior_proximal.find_min());
+
+  static int count = 0;
+  ++count;
+  if (proximal_filename_prefix.size()>0)
+    {
+      char *filename = new char[proximal_filename_prefix.size()+100];
+      sprintf(filename, "%s%d.v", proximal_filename_prefix.c_str(), count);
+      write_to_file(filename, prior_proximal);
+      delete[] filename;
+    }
+}
+
+template <typename elemT>
+void 
+QuadraticPrior<elemT>::
 compute_gradient(DiscretisedDensity<3,elemT>& prior_gradient, 
                  const DiscretisedDensity<3,elemT> &current_image_estimate)
 {
