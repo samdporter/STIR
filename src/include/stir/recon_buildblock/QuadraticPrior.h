@@ -111,6 +111,16 @@ class QuadraticPrior:  public
   void compute_gradient(DiscretisedDensity<3,elemT>& prior_gradient, 
                         const DiscretisedDensity<3,elemT> &current_image_estimate);
 
+
+  void compute_proximal_OSL(DiscretisedDensity<3,elemT>& prior_proximal_OSL, 
+                 const DiscretisedDensity<3,elemT> &current_image_estimate,
+                 int tau);
+
+
+  void compute_proximal(DiscretisedDensity<3,elemT>& prior_proximal_OSL, 
+                 const DiscretisedDensity<3,elemT> &current_image_estimate,
+                 int tau);
+
   //! compute the parabolic surrogate for the prior
   /*! in the case of quadratic priors this will just be the sum of weighting coefficients*/
   void parabolic_surrogate_curvature(DiscretisedDensity<3,elemT>& parabolic_surrogate_curvature, 
@@ -161,6 +171,8 @@ protected:
      gradient_filename_prefix and the counter.
   */
   std::string gradient_filename_prefix;
+
+  std::string proximal_filename_prefix;
 
   //! penalty weights
   /*! 
